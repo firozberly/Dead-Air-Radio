@@ -1,0 +1,2 @@
+const modules=['Music Upload','Mix Upload','Auto DJ Scheduler','Blog CMS','Artist Management','Album Sales','Merchandise','Orders & Payments','Submissions Review','Analytics'];
+export default function Page(){return <main className='p-8'><h1 className='text-3xl'>Curator Portal</h1><p className='opacity-70'>Role-based modules</p><ul className='mt-4 grid md:grid-cols-2 gap-3'>{modules.map(m=><li key={m} className='border p-3'>{m}</li>)}</ul></main>}

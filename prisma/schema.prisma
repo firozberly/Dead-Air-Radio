@@ -1,0 +1,26 @@
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "postgresql" url = env("DATABASE_URL") }
+
+enum RoleName { SUPER_ADMIN CURATOR ARTIST EDITOR STORE_MANAGER }
+enum ModerationStatus { PENDING APPROVED REJECTED FLAGGED }
+
+model User { id String @id @default(cuid()) email String @unique name String? roles Role[] artistProfile ArtistProfile? createdAt DateTime @default(now()) }
+model Role { id String @id @default(cuid()) name RoleName userId String user User @relation(fields:[userId], references:[id]) }
+model ArtistProfile { id String @id @default(cuid()) userId String @unique user User @relation(fields:[userId], references:[id]) slug String @unique bio String? payoutAccount PayoutAccount? }
+model PayoutAccount { id String @id @default(cuid()) artistId String @unique artist ArtistProfile @relation(fields:[artistId], references:[id]) provider String accountRef String? onboardingComplete Boolean @default(false) }
+model Track { id String @id @default(cuid()) title String artistId String rightsConfirmed Boolean moderationStatus ModerationStatus @default(PENDING) }
+model Mix { id String @id @default(cuid()) slug String @unique title String rightsConfirmed Boolean moderationStatus ModerationStatus @default(PENDING) }
+model Album { id String @id @default(cuid()) title String artistId String priceCents Int rightsConfirmed Boolean }
+model AlbumTrack { id String @id @default(cuid()) albumId String title String position Int }
+model Product { id String @id @default(cuid()) slug String @unique title String priceCents Int inventory Int rightsConfirmed Boolean }
+model Order { id String @id @default(cuid()) email String status String items OrderItem[] payment Payment? createdAt DateTime @default(now()) }
+model OrderItem { id String @id @default(cuid()) orderId String order Order @relation(fields:[orderId], references:[id]) productId String? albumId String? quantity Int @default(1) priceCents Int }
+model Payment { id String @id @default(cuid()) orderId String @unique order Order @relation(fields:[orderId], references:[id]) provider String status String platformFeeCents Int artistAmountCents Int }
+model BlogPost { id String @id @default(cuid()) slug String @unique title String body String status String category String }
+model RadioShow { id String @id @default(cuid()) title String curatorId String notes String? }
+model Playlist { id String @id @default(cuid()) name String items PlaylistItem[] }
+model PlaylistItem { id String @id @default(cuid()) playlistId String playlist Playlist @relation(fields:[playlistId], references:[id]) trackId String priority Int @default(0) }
+model ScheduleSlot { id String @id @default(cuid()) showId String startAt DateTime endAt DateTime }
+model Submission { id String @id @default(cuid()) email String type String links String[] notes String? rightsConfirmed Boolean status String @default("pending") }
+model CuratorNote { id String @id @default(cuid()) submissionId String content String createdAt DateTime @default(now()) }
+model AuditLog { id String @id @default(cuid()) actorId String action String entity String entityId String meta Json? createdAt DateTime @default(now()) }
