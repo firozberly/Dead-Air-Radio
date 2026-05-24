@@ -1,26 +1,557 @@
-generator client { provider = "prisma-client-js" }
-datasource db { provider = "postgresql" url = env("DATABASE_URL") }
+// This is your Dead Air Radio database schema
+// Think of it as a blueprint for all the information your app stores
 
-enum RoleName { SUPER_ADMIN CURATOR ARTIST EDITOR STORE_MANAGER }
-enum ModerationStatus { PENDING APPROVED REJECTED FLAGGED }
+generator client {
+  provider = "prisma-client-js"
+}
 
-model User { id String @id @default(cuid()) email String @unique name String? roles Role[] artistProfile ArtistProfile? createdAt DateTime @default(now()) }
-model Role { id String @id @default(cuid()) name RoleName userId String user User @relation(fields:[userId], references:[id]) }
-model ArtistProfile { id String @id @default(cuid()) userId String @unique user User @relation(fields:[userId], references:[id]) slug String @unique bio String? payoutAccount PayoutAccount? }
-model PayoutAccount { id String @id @default(cuid()) artistId String @unique artist ArtistProfile @relation(fields:[artistId], references:[id]) provider String accountRef String? onboardingComplete Boolean @default(false) }
-model Track { id String @id @default(cuid()) title String artistId String rightsConfirmed Boolean moderationStatus ModerationStatus @default(PENDING) }
-model Mix { id String @id @default(cuid()) slug String @unique title String rightsConfirmed Boolean moderationStatus ModerationStatus @default(PENDING) }
-model Album { id String @id @default(cuid()) title String artistId String priceCents Int rightsConfirmed Boolean }
-model AlbumTrack { id String @id @default(cuid()) albumId String title String position Int }
-model Product { id String @id @default(cuid()) slug String @unique title String priceCents Int inventory Int rightsConfirmed Boolean }
-model Order { id String @id @default(cuid()) email String status String items OrderItem[] payment Payment? createdAt DateTime @default(now()) }
-model OrderItem { id String @id @default(cuid()) orderId String order Order @relation(fields:[orderId], references:[id]) productId String? albumId String? quantity Int @default(1) priceCents Int }
-model Payment { id String @id @default(cuid()) orderId String @unique order Order @relation(fields:[orderId], references:[id]) provider String status String platformFeeCents Int artistAmountCents Int }
-model BlogPost { id String @id @default(cuid()) slug String @unique title String body String status String category String }
-model RadioShow { id String @id @default(cuid()) title String curatorId String notes String? }
-model Playlist { id String @id @default(cuid()) name String items PlaylistItem[] }
-model PlaylistItem { id String @id @default(cuid()) playlistId String playlist Playlist @relation(fields:[playlistId], references:[id]) trackId String priority Int @default(0) }
-model ScheduleSlot { id String @id @default(cuid()) showId String startAt DateTime endAt DateTime }
-model Submission { id String @id @default(cuid()) email String type String links String[] notes String? rightsConfirmed Boolean status String @default("pending") }
-model CuratorNote { id String @id @default(cuid()) submissionId String content String createdAt DateTime @default(now()) }
-model AuditLog { id String @id @default(cuid()) actorId String action String entity String entityId String meta Json? createdAt DateTime @default(now()) }
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS - These are like dropdowns with fixed options
+// ============================================================================
+
+enum RoleName {
+  SUPER_ADMIN    // Can do everything
+  CURATOR        // Manages shows, reviews submissions
+  ARTIST         // Can upload tracks, mixes, manage sales
+  EDITOR         // Can write/publish blog posts
+  STORE_MANAGER  // Manages products and inventory
+}
+
+enum ModerationStatus {
+  PENDING   // Waiting for curator review
+  APPROVED  // Curator approved it
+  REJECTED  // Curator said no
+  FLAGGED   // Flagged for manual review
+}
+
+enum PaymentStatus {
+  PENDING      // Payment initiated
+  COMPLETED    // Payment successful
+  FAILED       // Payment failed
+  REFUNDED     // Payment refunded
+}
+
+enum OrderStatus {
+  PENDING        // Order created, awaiting payment
+  PROCESSING     // Payment received, preparing
+  SHIPPED        // Order shipped
+  DELIVERED      // Order delivered
+  CANCELLED      // Order cancelled
+}
+
+// ============================================================================
+// USERS & AUTHENTICATION
+// ============================================================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  name          String?
+  image         String?   // Avatar/profile picture URL
+  
+  // Authentication
+  accounts      Account[]
+  sessions      Session[]
+  
+  // Relationships
+  roles         Role[]
+  artistProfile ArtistProfile?
+  submissions   Submission[]
+  curatorNotes  CuratorNote[]
+  orders        Order[]
+  auditLogs     AuditLog[]
+  
+  // Timestamps
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+// NextAuth.js account linking
+model Account {
+  id                 String  @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String?
+  access_token       String?
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String?
+  session_state      String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+// NextAuth.js sessions
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// User roles (a user can have multiple roles)
+model Role {
+  id     String   @id @default(cuid())
+  name   RoleName
+  userId String
+  user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+}
+
+// ============================================================================
+// ARTIST PROFILES & PAYOUTS
+// ============================================================================
+
+model ArtistProfile {
+  id   String @id @default(cuid())
+  userId String @unique
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Public info
+  slug        String @unique // URL-friendly name (e.g., "dj-alex")
+  bio         String?
+  imageUrl    String? // Artist photo/avatar
+  
+  // Content created by this artist
+  tracks      Track[]
+  mixes       Mix[]
+  albums      Album[]
+  radioShows  RadioShow[]
+  
+  // Payouts
+  payoutAccount PayoutAccount?
+  
+  // Stats
+  totalListeners Int @default(0)
+  totalEarnings  BigInt @default(0) // In cents
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model PayoutAccount {
+  id                    String   @id @default(cuid())
+  artistId              String   @unique
+  artist                ArtistProfile @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  
+  // Payment provider info
+  provider              String   // "stripe", "razorpay", "cashfree", etc.
+  accountRef            String   // External account ID from provider
+  onboardingCompleted   Boolean  @default(false)
+  
+  // Payout settings
+  payoutSchedule        String   @default("monthly") // "weekly", "monthly", "manual"
+  minPayoutAmount       BigInt   @default(10000) // In cents ($100)
+  
+  // Bank/payment details (encrypted in production)
+  bankAccountLast4      String?
+  bankCountry           String?
+  
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+// ============================================================================
+// AUDIO CONTENT - Tracks, Mixes, Albums
+// ============================================================================
+
+model Track {
+  id                String   @id @default(cuid())
+  
+  // Basic info
+  title             String
+  artistId          String
+  artist            ArtistProfile @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  
+  // Audio files (stored in object storage like S3)
+  audioUrl          String   // URL to full audio file
+  duration          Int      // Duration in seconds
+  
+  // Metadata
+  genre             String?
+  description       String?
+  releaseDate       DateTime?
+  isrc              String?  // International Standard Recording Code
+  
+  // Waveform data (for visual display)
+  waveformUrl       String?  // URL to waveform JSON
+  
+  // Rights & moderation
+  rightsConfirmed   Boolean  @default(false)
+  moderationStatus  ModerationStatus @default(PENDING)
+  
+  // Usage
+  mixes             Mix[]    // Tracks can be in multiple mixes
+  albums            Album[]  // Tracks can be in multiple albums
+  playlists         PlaylistItem[]
+  
+  // Stats
+  playCount         Int      @default(0)
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Mix {
+  id                String   @id @default(cuid())
+  
+  // Basic info
+  slug              String   @unique
+  title             String
+  artistId          String
+  artist            ArtistProfile @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  
+  // Cover art
+  coverUrl          String?
+  description       String?
+  
+  // Tracks in this mix
+  tracks            Track[]
+  
+  // Rights & moderation
+  rightsConfirmed   Boolean  @default(false)
+  moderationStatus  ModerationStatus @default(PENDING)
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Album {
+  id                String   @id @default(cuid())
+  
+  // Basic info
+  title             String
+  artistId          String
+  artist            ArtistProfile @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  
+  // Album details
+  slug              String   @unique
+  description       String?
+  coverUrl          String?
+  releaseDate       DateTime?
+  
+  // Tracks in album
+  tracks            Track[]
+  albumTracks       AlbumTrack[] // Ordering and additional metadata
+  
+  // Pricing (for digital sales)
+  priceCents        Int      // Price in cents ($9.99 = 999)
+  isForSale         Boolean  @default(true)
+  
+  // Rights & moderation
+  rightsConfirmed   Boolean  @default(false)
+  moderationStatus  ModerationStatus @default(PENDING)
+  
+  // Stats
+  unitsSold         Int      @default(0)
+  revenue           BigInt   @default(0) // In cents
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+// Join table to maintain track order in albums
+model AlbumTrack {
+  id        String @id @default(cuid())
+  albumId   String
+  album     Album  @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  
+  trackId   String
+  track     Track  @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  
+  position  Int    // Track order in album (1, 2, 3, etc.)
+  
+  @@unique([albumId, trackId])
+}
+
+// ============================================================================
+// RADIO SHOWS & SCHEDULING
+// ============================================================================
+
+model RadioShow {
+  id            String   @id @default(cuid())
+  
+  title         String
+  slug          String   @unique
+  description   String?
+  imageUrl      String?
+  
+  // Host info
+  curatorId     String
+  curator       ArtistProfile @relation(fields: [curatorId], references: [id], onDelete: Cascade)
+  
+  // Show details
+  notes         String?
+  genre         String?
+  frequency     String?  // "weekly", "daily", "monthly", etc.
+  
+  // Schedule
+  scheduleSlots ScheduleSlot[]
+  playlists     Playlist[]
+  
+  // Stats
+  totalListeners Int @default(0)
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model ScheduleSlot {
+  id        String   @id @default(cuid())
+  
+  showId    String
+  show      RadioShow @relation(fields: [showId], references: [id], onDelete: Cascade)
+  
+  startAt   DateTime // When the show starts
+  endAt     DateTime // When the show ends
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Playlist {
+  id    String @id @default(cuid())
+  
+  showId String
+  show   RadioShow @relation(fields: [showId], references: [id], onDelete: Cascade)
+  
+  name  String
+  
+  items PlaylistItem[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PlaylistItem {
+  id          String @id @default(cuid())
+  
+  playlistId  String
+  playlist    Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  
+  trackId     String
+  track       Track @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  
+  position    Int @default(0) // Order in playlist
+  
+  @@unique([playlistId, trackId])
+}
+
+// ============================================================================
+// E-COMMERCE - Products, Orders, Payments
+// ============================================================================
+
+model Product {
+  id              String   @id @default(cuid())
+  
+  // Product info
+  slug            String   @unique
+  title           String
+  description     String?
+  imageUrl        String?
+  
+  // Pricing & inventory
+  priceCents      Int      // Price in cents
+  inventory       Int      // How many units in stock (-1 = unlimited)
+  
+  // Rights & moderation
+  rightsConfirmed Boolean  @default(false)
+  moderationStatus ModerationStatus @default(PENDING)
+  
+  // Sales
+  orderItems      OrderItem[]
+  unitsSold       Int      @default(0)
+  revenue         BigInt   @default(0) // In cents
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Order {
+  id              String   @id @default(cuid())
+  
+  // Customer info
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  email           String   // Email for guest orders
+  
+  // Order details
+  items           OrderItem[]
+  status          OrderStatus @default(PENDING)
+  
+  // Totals
+  subtotalCents   Int      @default(0)
+  taxCents        Int      @default(0)
+  totalCents      Int      @default(0)
+  
+  // Payment
+  payment         Payment?
+  
+  // Shipping (for physical products)
+  shippingAddress String?
+  shippingCountry String?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model OrderItem {
+  id          String @id @default(cuid())
+  
+  orderId     String
+  order       Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  // Item can be a product or album
+  productId   String?
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  
+  albumId     String?
+  album       Album? @relation(fields: [albumId], references: [id], onDelete: SetNull)
+  
+  quantity    Int    @default(1)
+  priceCents  Int    // Price per unit at time of purchase
+  
+  @@check("(productId IS NOT NULL AND albumId IS NULL) OR (productId IS NULL AND albumId IS NOT NULL)")
+}
+
+model Payment {
+  id                    String   @id @default(cuid())
+  
+  orderId               String   @unique
+  order                 Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  // Provider info
+  provider              String   // "stripe", "razorpay", etc.
+  externalTransactionId String?  // ID from payment provider
+  status                PaymentStatus @default(PENDING)
+  
+  // Amount breakdown
+  amountCents           Int      // Total amount
+  platformFeeCents      Int      // Dead Air's cut
+  artistAmountCents     Int      // Artist's cut
+  
+  // Metadata
+  paymentMethodType     String?  // "card", "bank_transfer", etc.
+  errorMessage          String?  // If payment failed
+  
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model Album {
+  // ... (moved above with other content models)
+}
+
+// ============================================================================
+// EDITORIAL - Blog Posts
+// ============================================================================
+
+model BlogPost {
+  id        String   @id @default(cuid())
+  
+  slug      String   @unique
+  title     String
+  excerpt   String?
+  body      String   // Markdown or HTML
+  
+  imageUrl  String?  // Featured image
+  
+  category  String?
+  status    String   @default("draft") // "draft", "published"
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ============================================================================
+// SUBMISSIONS & CURATION
+// ============================================================================
+
+model Submission {
+  id              String   @id @default(cuid())
+  
+  // Submitter info
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  email           String   // For guest submissions
+  name            String?
+  
+  // What they're submitting
+  type            String   // "track", "mix", "album", "guest"
+  description     String?
+  links           String[] // URLs to SoundCloud, Dropbox, etc.
+  
+  // Rights & status
+  rightsConfirmed Boolean  @default(false)
+  status          String   @default("pending") // "pending", "approved", "rejected"
+  
+  // Curation
+  curatorNotes    CuratorNote[]
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model CuratorNote {
+  id            String   @id @default(cuid())
+  
+  submissionId  String
+  submission    Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  
+  userId        String
+  curator       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  content       String  // The note/feedback
+  
+  createdAt     DateTime @default(now())
+}
+
+// ============================================================================
+// AUDIT & LOGGING
+// ============================================================================
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  
+  // Who did the action
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // What happened
+  action    String   // "created", "updated", "deleted", "published", etc.
+  entity    String   // "track", "order", "user", etc.
+  entityId  String   // ID of the thing that changed
+  
+  // Additional context
+  meta      Json?    // Extra data (old values, new values, etc.)
+  
+  createdAt DateTime @default(now())
+  
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// MISC
+// ============================================================================
+
+// Optional: For newsletter subscriptions
+model NewsletterSubscriber {
+  id    String @id @default(cuid())
+  email String @unique
+  createdAt DateTime @default(now())
+}
