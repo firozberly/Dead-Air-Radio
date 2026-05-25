@@ -451,10 +451,6 @@ model Payment {
   updatedAt             DateTime @updatedAt
 }
 
-model Album {
-  // ... (moved above with other content models)
-}
-
 // ============================================================================
 // EDITORIAL - Blog Posts
 // ============================================================================
